@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Thesis Experiment Dashboard</title>
+<style>
+  :root {
+    --page: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e;
+    --muted: #898781; --grid: #e1e0d9; --baseline: #c3c2b7;
+    --border: rgba(11,11,11,0.10); --up: #006300; --down: #d03b3b;
+    --llm: #2a78d6; --rules: #1baf7a; --benchmark: #898781;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7;
+      --muted: #898781; --grid: #2c2c2a; --baseline: #383835;
+      --border: rgba(255,255,255,0.10); --up: #0ca30c; --down: #e66767;
+      --llm: #3987e5; --rules: #199e70; --benchmark: #898781;
+    }
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: var(--page); color: var(--ink); padding: 24px;
+         font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  h1 { font-size: 19px; } h2 { font-size: 14px; color: var(--ink-2); margin: 0 0 10px; }
+  .sub { color: var(--muted); font-size: 12px; margin: 4px 0 20px; }
+  .card { background: var(--surface); border: 1px solid var(--border);
+          border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+           gap: 12px; margin-bottom: 16px; }
+  .tile { background: var(--surface); border: 1px solid var(--border);
+          border-radius: 10px; padding: 12px 14px; }
+  .tile .k { font-size: 11px; color: var(--muted); text-transform: uppercase;
+             letter-spacing: .04em; display: flex; align-items: center; gap: 6px; }
+  .tile .v { font-size: 22px; font-weight: 650; margin-top: 4px; }
+  .tile .d { font-size: 12px; margin-top: 2px; color: var(--ink-2); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+  .pos { color: var(--up); } .neg { color: var(--down); }
+  svg text { font: 11px system-ui, sans-serif; fill: var(--muted); }
+  .serieslabel { font-weight: 600; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th { text-align: left; color: var(--muted); font-weight: 500; padding: 6px 8px;
+       border-bottom: 1px solid var(--grid); white-space: nowrap; }
+  td { padding: 6px 8px; border-bottom: 1px solid var(--grid); vertical-align: top; }
+  td.num { font-variant-numeric: tabular-nums; text-align: right; }
+  .sig { font-weight: 650; padding: 1px 7px; border-radius: 9px; font-size: 11px; }
+  .sig.BUY { color: var(--up); background: color-mix(in srgb, var(--up) 12%, transparent); }
+  .sig.SELL { color: var(--down); background: color-mix(in srgb, var(--down) 12%, transparent); }
+  .sig.HOLD { color: var(--ink-2); background: color-mix(in srgb, var(--muted) 15%, transparent); }
+  .armtag { font-size: 11px; color: var(--ink-2); }
+  .rationale { color: var(--ink-2); max-width: 560px; }
+  .err { color: var(--down); font-size: 11px; }
+  .scroll { overflow-x: auto; }
+  #tip { position: fixed; pointer-events: none; background: var(--surface);
+         border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px;
+         font-size: 12px; box-shadow: 0 4px 14px rgba(0,0,0,.15); display: none; z-index: 9; }
+  .legend { display: flex; gap: 16px; font-size: 12px; color: var(--ink-2);
+            margin-bottom: 8px; flex-wrap: wrap; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .empty { color: var(--muted); padding: 24px; text-align: center; }
+</style>
+</head>
+<body>
+<h1>AI vs Rules vs Market — Thesis Experiment</h1>
+<div class="sub">Model: <b>meta-llama-3.1-8b-instruct</b> · generated 2026-07-14 18:04 · each arm starts at
+$100,000 (virtual) · open this file any time: it always shows the latest run</div>
+
+<div class="tiles" id="tiles"></div>
+
+<div class="card">
+  <h2>Equity curves</h2>
+  <div class="legend" id="legend"></div>
+  <div id="chart"></div>
+</div>
+
+<div class="card">
+  <h2>Signal mix by arm</h2>
+  <div class="scroll"><table id="mix"></table></div>
+</div>
+
+<div class="card">
+  <h2>Latest decisions (most recent 60)</h2>
+  <div class="scroll"><table id="dec"></table></div>
+</div>
+
+<div class="card">
+  <h2>Run history</h2>
+  <div class="scroll"><table id="runs"></table></div>
+</div>
+
+<div id="tip"></div>
+
+<script>
+const D = {"series": {"llm": [], "rules": [], "benchmark": []}, "latest": {"llm": {"equity": null, "ret_pct": null, "positions": 0}, "rules": {"equity": null, "ret_pct": null, "positions": 0}, "benchmark": {"equity": null, "ret_pct": null, "positions": 0}}, "counts": {}, "decisions": [], "runs": [], "stats": {"total_decisions": 0, "completed_runs": 0, "skipped_runs": 0, "errors": 0, "first_run": null}, "model": "meta-llama-3.1-8b-instruct", "initial_cash": 100000.0, "generated": "2026-07-14 18:04"};
+const ARMS = [
+  {id: "llm",       label: "LLM",       color: "var(--llm)"},
+  {id: "rules",     label: "Rules",     color: "var(--rules)"},
+  {id: "benchmark", label: "SPY B&H",   color: "var(--benchmark)"},
+];
+const fmt$ = v => v == null ? "—" : "$" + v.toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2});
+const fmtPct = v => v == null ? "" : (v >= 0 ? "+" : "") + v.toFixed(2) + "%";
+
+/* ---- stat tiles ---- */
+const tiles = document.getElementById("tiles");
+for (const a of ARMS) {
+  const l = D.latest[a.id] || {};
+  const cls = (l.ret_pct ?? 0) >= 0 ? "pos" : "neg";
+  tiles.insertAdjacentHTML("beforeend", `
+    <div class="tile">
+      <div class="k"><span class="dot" style="background:${a.color}"></span>${a.label}</div>
+      <div class="v">${fmt$(l.equity)}</div>
+      <div class="d"><span class="${cls}">${fmtPct(l.ret_pct)}</span> · ${l.positions ?? 0} positions</div>
+    </div>`);
+}
+const s = D.stats;
+const days = s.first_run ? Math.max(1, Math.round((Date.now() - new Date(s.first_run)) / 864e5)) : 0;
+tiles.insertAdjacentHTML("beforeend", `
+  <div class="tile"><div class="k">Decisions logged</div><div class="v">${s.total_decisions.toLocaleString()}</div>
+    <div class="d">${s.errors} with errors</div></div>
+  <div class="tile"><div class="k">Runs</div><div class="v">${s.completed_runs}</div>
+    <div class="d">${s.skipped_runs} skipped · day ${days} of ~504</div></div>`);
+
+/* ---- legend ---- */
+document.getElementById("legend").innerHTML = ARMS.map(a =>
+  `<span><span class="dot" style="background:${a.color}"></span>${a.label}</span>`).join("");
+
+/* ---- equity line chart (SVG) ---- */
+(function () {
+  const host = document.getElementById("chart");
+  const all = ARMS.flatMap(a => (D.series[a.id] || []).map(p => p.eq));
+  if (!all.length) { host.innerHTML = '<div class="empty">No completed runs yet — the chart appears after the first run.</div>'; return; }
+
+  const W = Math.max(680, Math.min(1100, host.clientWidth || 900)), H = 300;
+  const M = {t: 14, r: 90, b: 28, l: 64};
+  const n = Math.max(...ARMS.map(a => (D.series[a.id] || []).length));
+  let lo = Math.min(...all, D.initial_cash), hi = Math.max(...all, D.initial_cash);
+  const pad = Math.max((hi - lo) * 0.08, hi * 0.002); lo -= pad; hi += pad;
+
+  const x = i => M.l + (n === 1 ? (W - M.l - M.r) / 2 : i * (W - M.l - M.r) / (n - 1));
+  const y = v => M.t + (H - M.t - M.b) * (1 - (v - lo) / (hi - lo));
+  const dates = (D.series[ARMS[0].id] || D.series.rules || []).map(p => p.t);
+
+  let g = "";
+  const ticks = 4;
+  const kDecimals = (hi - lo) < 5000 ? 1 : 0;   // tight range: 99.8k not 100k
+  for (let i = 0; i <= ticks; i++) {
+    const v = lo + (hi - lo) * i / ticks, yy = y(v);
+    g += `<line x1="${M.l}" y1="${yy}" x2="${W - M.r}" y2="${yy}" stroke="var(--grid)" stroke-width="1"/>
+          <text x="${M.l - 8}" y="${yy + 4}" text-anchor="end">${(v / 1000).toFixed(kDecimals)}k</text>`;
+  }
+  const step = Math.max(1, Math.ceil(n / 6));
+  for (let i = 0; i < n; i += step)
+    g += `<text x="${x(i)}" y="${H - 8}" text-anchor="middle">${dates[i] || ""}</text>`;
+  g += `<line x1="${M.l}" y1="${y(D.initial_cash)}" x2="${W - M.r}" y2="${y(D.initial_cash)}"
+         stroke="var(--baseline)" stroke-width="1" stroke-dasharray="4 4"/>`;
+
+  // Draw lines + end markers, then de-collide the direct labels vertically.
+  const labels = [];
+  for (const a of ARMS) {
+    const pts = D.series[a.id] || [];
+    if (!pts.length) continue;
+    const path = pts.map((p, i) => `${i ? "L" : "M"}${x(i)},${y(p.eq)}`).join("");
+    if (pts.length > 1)
+      g += `<path d="${path}" fill="none" stroke="${a.color}" stroke-width="2" stroke-linejoin="round"/>`;
+    const lastX = x(pts.length - 1), lastY = y(pts[pts.length - 1].eq);
+    g += `<circle cx="${lastX}" cy="${lastY}" r="4" fill="${a.color}" stroke="var(--surface)" stroke-width="2"/>`;
+    labels.push({label: a.label, color: a.color, y: lastY});
+  }
+  labels.sort((p, q) => p.y - q.y);
+  for (let i = 1; i < labels.length; i++)
+    labels[i].y = Math.max(labels[i].y, labels[i - 1].y + 15);
+  for (const l of labels)
+    g += `<text class="serieslabel" x="${W - M.r + 8}" y="${l.y + 4}" style="fill:${l.color}">${l.label}</text>`;
+  g += `<line id="xhair" x1="0" x2="0" y1="${M.t}" y2="${H - M.b}" stroke="var(--baseline)" stroke-width="1" visibility="hidden"/>`;
+
+  host.innerHTML = `<svg id="eqsvg" viewBox="0 0 ${W} ${H}" style="width:100%;max-width:${W}px">${g}</svg>`;
+
+  const svg = document.getElementById("eqsvg"), tip = document.getElementById("tip"),
+        xh = document.getElementById("xhair");
+  svg.addEventListener("mousemove", ev => {
+    const r = svg.getBoundingClientRect(), sx = W / r.width;
+    const px = (ev.clientX - r.left) * sx;
+    if (px < M.l || px > W - M.r || n < 1) { tip.style.display = "none"; xh.setAttribute("visibility", "hidden"); return; }
+    const i = Math.max(0, Math.min(n - 1, Math.round((px - M.l) / ((W - M.l - M.r) / Math.max(1, n - 1)))));
+    xh.setAttribute("x1", x(i)); xh.setAttribute("x2", x(i)); xh.setAttribute("visibility", "visible");
+    tip.innerHTML = `<b>${dates[i] || ""}</b><br>` + ARMS.map(a => {
+      const p = (D.series[a.id] || [])[i];
+      return p ? `<span class="dot" style="background:${a.color}"></span> ${a.label}: ${fmt$(p.eq)}` : "";
+    }).filter(Boolean).join("<br>");
+    tip.style.display = "block";
+    tip.style.left = Math.min(ev.clientX + 14, innerWidth - 200) + "px";
+    tip.style.top = (ev.clientY + 14) + "px";
+  });
+  svg.addEventListener("mouseleave", () => { tip.style.display = "none"; xh.setAttribute("visibility", "hidden"); });
+})();
+
+/* ---- signal mix ---- */
+document.getElementById("mix").innerHTML =
+  "<tr><th>Arm</th><th>BUY</th><th>HOLD</th><th>SELL</th></tr>" +
+  ARMS.filter(a => a.id !== "benchmark").map(a => {
+    const c = D.counts[a.id] || {};
+    return `<tr><td><span class="dot" style="background:${a.color}"></span> ${a.label}</td>
+      <td class="num">${c.BUY || 0}</td><td class="num">${c.HOLD || 0}</td><td class="num">${c.SELL || 0}</td></tr>`;
+  }).join("");
+
+/* ---- decisions table ---- */
+document.getElementById("dec").innerHTML =
+  "<tr><th>When (UTC)</th><th>Arm</th><th>Ticker</th><th>Signal</th><th>Price</th><th>Reasoning</th></tr>" +
+  (D.decisions.length ? D.decisions.map(d => `
+    <tr><td>${d.created_utc.replace("T", " ").slice(0, 16)}</td>
+        <td class="armtag">${d.arm}</td><td><b>${d.ticker}</b></td>
+        <td><span class="sig ${d.signal}">${d.signal}</span></td>
+        <td class="num">${d.price ? "$" + d.price.toFixed(2) : "—"}</td>
+        <td class="rationale">${(d.rationale || "").replace(/</g, "&lt;")}
+            ${d.error ? `<div class="err">error: ${String(d.error).replace(/</g, "&lt;")}</div>` : ""}</td></tr>`).join("")
+   : '<tr><td colspan="6" class="empty">No decisions yet.</td></tr>');
+
+/* ---- run history ---- */
+document.getElementById("runs").innerHTML =
+  "<tr><th>#</th><th>Started (UTC)</th><th>Status</th><th>Model</th><th>Notes</th></tr>" +
+  (D.runs.length ? D.runs.map(r => `
+    <tr><td class="num">${r.run_id}</td><td>${r.started_utc.replace("T", " ").slice(0, 16)}</td>
+        <td>${r.status}</td><td class="armtag">${r.llm_model || ""}</td><td class="armtag">${r.notes || ""}</td></tr>`).join("")
+   : '<tr><td colspan="5" class="empty">No runs yet.</td></tr>');
+</script>
+</body>
+</html>

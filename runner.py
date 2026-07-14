@@ -20,6 +20,7 @@ import sys
 from datetime import datetime
 
 import config
+import dashboard
 import db
 import llm_arm
 import market_data
@@ -69,12 +70,21 @@ def main() -> int:
 
     conn = db.connect()
 
+    run_note = "forced test run" if args.force else ""
     if not market_data.is_market_open() and not args.force:
-        run_id = db.start_run(conn, config.LLM_MODEL, code_version(),
-                              notes="market closed")
-        db.finish_run(conn, run_id, "skipped_market_closed")
-        logger.info("Market closed — run %d recorded as skipped.", run_id)
-        return 0
+        # Catch-up: the Mac may have been asleep at 15:30. If today's session
+        # happened and no run captured it, run now at close prices rather
+        # than losing the day.
+        if market_data.had_session_today() and not db.completed_run_today(conn):
+            run_note = "late catch-up run (after close, close prices)"
+            logger.info("Missed the in-session window — running late catch-up.")
+        else:
+            run_id = db.start_run(conn, config.LLM_MODEL, code_version(),
+                                  notes="market closed")
+            db.finish_run(conn, run_id, "skipped_market_closed")
+            dashboard.generate()
+            logger.info("Market closed — run %d recorded as skipped.", run_id)
+            return 0
 
     llm_up = llm_arm.ensure_server()
     if not llm_up:
@@ -82,8 +92,7 @@ def main() -> int:
                      "HOLD + error for every ticker this run.")
 
     tickers = [t.upper() for t in (args.tickers or config.WATCHLIST)]
-    notes = "forced test run" if args.force else ""
-    run_id = db.start_run(conn, config.LLM_MODEL, code_version(), notes=notes)
+    run_id = db.start_run(conn, config.LLM_MODEL, code_version(), notes=run_note)
     logger.info("Run %d started | model=%s | code=%s | %d tickers",
                 run_id, config.LLM_MODEL, code_version(), len(tickers))
 
@@ -141,7 +150,8 @@ def main() -> int:
 
     db.finish_run(conn, run_id, "completed")
     backup_db()
-    logger.info("Run %d completed.", run_id)
+    dashboard.generate()
+    logger.info("Run %d completed — dashboard updated.", run_id)
     return 0
 
 

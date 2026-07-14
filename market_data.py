@@ -101,18 +101,34 @@ def get_packet(ticker: str) -> dict:
     return packet
 
 
+def _last_spy_bar() -> datetime | None:
+    try:
+        bars = yf.Ticker("SPY").history(period="1d", interval="1m")
+        if bars.empty:
+            return None
+        return bars.index[-1].to_pydatetime().astimezone(timezone.utc)
+    except Exception as exc:
+        logger.warning("market clock check failed: %s", exc)
+        return None
+
+
 def is_market_open() -> bool:
     """
     Keyless market-clock check: if SPY printed a 1-minute bar in the last
     20 minutes, the US market is trading.
     """
-    try:
-        bars = yf.Ticker("SPY").history(period="1d", interval="1m")
-        if bars.empty:
-            return False
-        last = bars.index[-1].to_pydatetime()
-        age_s = (datetime.now(timezone.utc) - last.astimezone(timezone.utc)).total_seconds()
-        return age_s < 20 * 60
-    except Exception as exc:
-        logger.warning("market clock check failed: %s", exc)
+    last = _last_spy_bar()
+    if last is None:
         return False
+    return (datetime.now(timezone.utc) - last).total_seconds() < 20 * 60
+
+
+def had_session_today() -> bool:
+    """True if the US market traded today (ET calendar day), open or closed."""
+    from zoneinfo import ZoneInfo
+
+    last = _last_spy_bar()
+    if last is None:
+        return False
+    et = ZoneInfo("America/New_York")
+    return last.astimezone(et).date() == datetime.now(et).date()

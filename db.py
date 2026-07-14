@@ -114,6 +114,21 @@ def finish_run(conn, run_id: int, status: str) -> None:
     conn.commit()
 
 
+def completed_run_today(conn) -> bool:
+    """True if a completed run already exists for today's ET calendar day."""
+    from datetime import datetime as dt
+    from zoneinfo import ZoneInfo
+
+    et = ZoneInfo("America/New_York")
+    midnight_et = dt.now(et).replace(hour=0, minute=0, second=0, microsecond=0)
+    cutoff_utc = midnight_et.astimezone(timezone.utc).isoformat(timespec="seconds")
+    row = conn.execute(
+        "SELECT COUNT(*) n FROM runs WHERE status = 'completed' AND started_utc >= ?",
+        (cutoff_utc,),
+    ).fetchone()
+    return row["n"] > 0
+
+
 def record_decision(conn, run_id, arm, ticker, signal, price, rationale,
                     inputs_json=None, raw_response=None, latency_ms=None,
                     error=None) -> None:
