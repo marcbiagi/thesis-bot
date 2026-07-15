@@ -62,7 +62,7 @@
 </head>
 <body>
 <h1>AI vs Rules vs Market — Thesis Experiment</h1>
-<div class="sub">Model: <b>google/gemma-4-12b-qat</b> · generated 2026-07-14 22:18 · each arm starts at
+<div class="sub">Model: <b>google/gemma-4-12b-qat</b> · generated 2026-07-15 15:37 · each arm starts at
 $100,000 (virtual) · open this file any time: it always shows the latest run</div>
 
 <div class="tiles" id="tiles"></div>
@@ -91,7 +91,7 @@ $100,000 (virtual) · open this file any time: it always shows the latest run</d
 <div id="tip"></div>
 
 <script>
-const D = {"series": {"llm": [], "rules": [], "benchmark": []}, "latest": {"llm": {"equity": null, "ret_pct": null, "positions": 0}, "rules": {"equity": null, "ret_pct": null, "positions": 0}, "benchmark": {"equity": null, "ret_pct": null, "positions": 0}}, "counts": {}, "decisions": [], "runs": [], "stats": {"total_decisions": 0, "completed_runs": 0, "skipped_runs": 0, "errors": 0, "first_run": null}, "model": "google/gemma-4-12b-qat", "initial_cash": 100000.0, "generated": "2026-07-14 22:18"};
+const D = {"series": {"llm": [], "rules": [], "benchmark": []}, "latest": {"llm": {"equity": null, "ret_pct": null, "positions": 0}, "rules": {"equity": null, "ret_pct": null, "positions": 0}, "benchmark": {"equity": null, "ret_pct": null, "positions": 0}}, "counts": {}, "decisions": [], "runs": [{"run_id": 1, "started_utc": "2026-07-15T19:37:38+00:00", "status": "skipped_market_closed", "llm_model": "google/gemma-4-12b-qat", "notes": "market closed"}], "stats": {"total_decisions": 0, "completed_runs": 0, "skipped_runs": 1, "errors": 0, "first_run": null}, "model": "google/gemma-4-12b-qat", "initial_cash": 100000.0, "generated": "2026-07-15 15:37"};
 const ARMS = [
   {id: "llm",       label: "LLM",       color: "var(--llm)"},
   {id: "rules",     label: "Rules",     color: "var(--rules)"},

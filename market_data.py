@@ -7,6 +7,7 @@ which keeps the pipeline free of API-key expiry risk over the two years.
 """
 
 import logging
+import time
 from datetime import datetime, timezone
 
 import yfinance as yf
@@ -101,25 +102,49 @@ def get_packet(ticker: str) -> dict:
     return packet
 
 
-def _last_spy_bar() -> datetime | None:
-    try:
-        bars = yf.Ticker("SPY").history(period="1d", interval="1m")
-        if bars.empty:
-            return None
-        return bars.index[-1].to_pydatetime().astimezone(timezone.utc)
-    except Exception as exc:
-        logger.warning("market clock check failed: %s", exc)
-        return None
+def _last_spy_bar(retries: int = 3) -> datetime | None:
+    """Latest SPY 1-minute bar, with retries — Yahoo has transient hiccups."""
+    for attempt in range(retries):
+        try:
+            bars = yf.Ticker("SPY").history(period="1d", interval="1m")
+            if not bars.empty:
+                return bars.index[-1].to_pydatetime().astimezone(timezone.utc)
+            logger.warning("market clock: empty SPY bars (attempt %d)", attempt + 1)
+        except Exception as exc:
+            logger.warning("market clock check failed (attempt %d): %s",
+                           attempt + 1, exc)
+        time.sleep(15 * (attempt + 1))
+    return None
+
+
+def _in_regular_hours_et() -> bool:
+    """Calendar fallback: weekday 9:30-16:00 ET (ignores holidays)."""
+    from zoneinfo import ZoneInfo
+
+    now = datetime.now(ZoneInfo("America/New_York"))
+    if now.weekday() >= 5:
+        return False
+    minutes = now.hour * 60 + now.minute
+    return 9 * 60 + 30 <= minutes < 16 * 60
 
 
 def is_market_open() -> bool:
     """
     Keyless market-clock check: if SPY printed a 1-minute bar in the last
     20 minutes, the US market is trading.
+
+    FAIL-OPEN: if the data source errors out entirely, fall back to the
+    weekday/hours calendar. A Yahoo outage must never be mistaken for
+    "market closed" — a wrongly-skipped day is lost data, while a run on
+    an unrecognized holiday just records decisions at stale prices (and is
+    visible in the data as such).
     """
     last = _last_spy_bar()
     if last is None:
-        return False
+        fallback = _in_regular_hours_et()
+        logger.warning("market clock unavailable — calendar fallback says %s",
+                       "OPEN" if fallback else "CLOSED")
+        return fallback
     return (datetime.now(timezone.utc) - last).total_seconds() < 20 * 60
 
 
@@ -129,6 +154,8 @@ def had_session_today() -> bool:
 
     last = _last_spy_bar()
     if last is None:
-        return False
+        # Data source down: assume a weekday had a session (holidays are the
+        # rare false positive; the catch-up run then just prices at last close).
+        return datetime.now(ZoneInfo("America/New_York")).weekday() < 5
     et = ZoneInfo("America/New_York")
     return last.astimezone(et).date() == datetime.now(et).date()
