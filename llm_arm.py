@@ -144,15 +144,23 @@ def decide(packet: dict, position_qty: float, avg_cost: float | None):
                                  json=payload, timeout=LLM_TIMEOUT_S)
             latency_ms = int((time.monotonic() - start) * 1000)
             resp.raise_for_status()
-            raw = resp.json()["choices"][0]["message"]["content"]
-            parsed = _parse(raw)
+            choice = resp.json()["choices"][0]
+            content = choice["message"].get("content") or ""
+            # Reasoning models (Gemma 4) also emit a thinking trace — keep it:
+            # it's qualitative research data. raw_response stores both parts.
+            reasoning_trace = choice["message"].get("reasoning_content") or ""
+            raw = json.dumps({"content": content,
+                              "reasoning_content": reasoning_trace,
+                              "finish_reason": choice.get("finish_reason")})
+            parsed = _parse(content)
             if parsed and parsed.get("signal") in ("BUY", "HOLD", "SELL"):
                 conf = parsed.get("confidence")
                 rationale = (f"[conf {conf}] " if conf is not None else "") + \
                     str(parsed.get("reasoning", "")).strip()
                 return parsed["signal"], rationale, raw, latency_ms, None
-            last_error = f"unparseable model output (attempt {attempt + 1})"
-            logger.warning("%s: %s: %r", packet["ticker"], last_error, raw[:200])
+            last_error = (f"empty/unparseable content (attempt {attempt + 1}, "
+                          f"finish_reason={choice.get('finish_reason')})")
+            logger.warning("%s: %s: %r", packet["ticker"], last_error, content[:200])
         except Exception as exc:
             last_error = f"{type(exc).__name__}: {exc}"
             logger.warning("%s: LLM call failed (attempt %d): %s",

@@ -41,10 +41,14 @@ MIN_ORDER_NOTIONAL = 10.0  # skip dust orders
 LLM_BASE_URL = "http://localhost:1234/v1"
 # PINNED for the duration of the experiment. Change ONLY before the official
 # start date (download the final model in LM Studio, put its id here).
-LLM_MODEL = "meta-llama-3.1-8b-instruct"
+# Gemma 4 12B QAT: official Google quantization-aware checkpoint, chosen
+# July 2026 as the best sub-15B open-weights reasoner that fits 16 GB.
+LLM_MODEL = "google/gemma-4-12b-qat"
 LLM_TEMPERATURE = 0.0      # deterministic as possible, for reproducibility
-LLM_MAX_TOKENS = 500
-LLM_TIMEOUT_S = 180        # local inference on an M4 can be slow; be patient
+# Gemma 4 is a reasoning model: it spends tokens thinking before answering.
+# The budget must cover reasoning + the final JSON, or content comes back empty.
+LLM_MAX_TOKENS = 1500
+LLM_TIMEOUT_S = 300        # local inference on an M4 can be slow; be patient
 LLM_RETRIES = 2
 
 # --- Rule-based arm thresholds --------------------------------------------------

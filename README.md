@@ -44,12 +44,16 @@ and applies the decisions to the virtual portfolios.
    Finance; runs skip days when the Mac is off at 15:30 ET (gaps are
    visible in the `runs` table).
 
-## Before the official experiment start
+## Pinned treatment model
 
-1. Download the final pinned model in LM Studio (e.g. Qwen3 14B Q4) and set
-   `LLM_MODEL` in `config.py` to its id (check `lms ls`).
-2. Delete `thesis.db` and `backups/` so the dataset starts empty.
-3. Commit, and write down the start date + hypotheses (pre-registration).
+`google/gemma-4-12b-qat` — official Google QAT checkpoint (~7.15 GB),
+pinned July 14, 2026. Gemma 4 is a reasoning model: its thinking trace is
+stored per decision in `decisions.raw_response` (`reasoning_content`)
+alongside the final JSON — qualitative data for the thesis. A full
+25-ticker run takes ~30 min on the M4 (≈75 s per LLM decision).
+
+Remaining pre-registration step: write down the start date + hypotheses
+before the first scheduled run counts.
 
 ## Operations
 
