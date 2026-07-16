@@ -7,6 +7,7 @@ thesis. Every run stores LLM_MODEL and the git commit hash alongside each
 decision, so any change is visible in the data.
 """
 
+import os
 from pathlib import Path
 
 # --- Experiment universe ------------------------------------------------------
@@ -37,8 +38,15 @@ INITIAL_CASH = 100_000.0   # each arm starts with the same virtual capital
 TARGET_WEIGHT = 0.04       # a BUY opens a position sized at 4% of arm equity
 MIN_ORDER_NOTIONAL = 10.0  # skip dust orders
 
-# --- LLM arm (LM Studio local server, OpenAI-compatible) -----------------------
-LLM_BASE_URL = "http://localhost:1234/v1"
+# --- Runtime environment --------------------------------------------------------
+# The same code runs on the Mac (LM Studio / Apple Metal) and on GitHub
+# Actions (llama.cpp / CPU). THESISBOT_CI=1 marks CI; the runtime label is
+# recorded with every run so the engine switch is visible in the data.
+IS_CI = os.environ.get("THESISBOT_CI") == "1"
+RUNTIME_LABEL = os.environ.get("THESISBOT_RUNTIME", "lmstudio-metal-local")
+
+# --- LLM arm (OpenAI-compatible server: LM Studio locally, llama.cpp in CI) ----
+LLM_BASE_URL = os.environ.get("THESISBOT_LLM_URL", "http://localhost:1234/v1")
 # PINNED for the duration of the experiment. Change ONLY before the official
 # start date (download the final model in LM Studio, put its id here).
 # Gemma 4 12B QAT: official Google quantization-aware checkpoint, chosen
@@ -70,7 +78,7 @@ MAX_HEADLINES = 8
 
 # --- Paths ----------------------------------------------------------------------
 ROOT = Path(__file__).resolve().parent
-DB_PATH = ROOT / "thesis.db"
+DB_PATH = Path(os.environ.get("THESISBOT_DB", ROOT / "thesis.db"))
 LOG_DIR = ROOT / "logs"
 BACKUP_DIR = ROOT / "backups"
 BACKUPS_TO_KEEP = 14

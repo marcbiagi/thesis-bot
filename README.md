@@ -60,7 +60,24 @@ alongside the final JSON — qualitative data for the thesis. A full
 Remaining pre-registration step: write down the start date + hypotheses
 before the first scheduled run counts.
 
-## Operations
+## Cloud execution (GitHub Actions — primary since July 16, 2026)
+
+`.github/workflows/daily-run.yml` runs the identical code daily on
+GitHub's runners: pinned llama.cpp `b10034` (CPU) serves the exact same
+GGUF file (`gemma-4-12B-it-QAT-Q4_0.gguf`, cached between runs), the DB is
+restored from `thesis.sql`, and results are committed back after each run
+(which doubles as off-machine backup). Runtime per run: ~3-4 h on CPU —
+irrelevant, nothing waits for it. Every run records its runtime label
+(`llamacpp-b10034-ci` vs `lmstudio-metal-local`), so the July 16 engine
+switch is a documented regime note (same weights, different inference
+engine; temperature 0).
+
+Two UTC crons (19:35 / 20:35) + an ET-window guard handle DST; the runner
+itself enforces at most one completed run per trading day. Manual test:
+Actions tab -> daily-run -> Run workflow with "test" checked (temp DB, no
+commit). Failures email the repo owner automatically.
+
+## Operations (local, legacy fallback)
 
 - Status: `python3 report.py`
 - Manual run: `python3 runner.py`

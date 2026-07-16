@@ -70,6 +70,15 @@ def main() -> int:
 
     conn = db.connect()
 
+    # One decision cycle per trading day, period. Protects against the
+    # local scheduler and the CI scheduler ever both firing on the same day.
+    if db.completed_run_today(conn) and not args.force:
+        run_id = db.start_run(conn, config.LLM_MODEL, code_version(),
+                              notes=f"runtime={config.RUNTIME_LABEL}")
+        db.finish_run(conn, run_id, "skipped_already_ran_today")
+        logger.info("A completed run already exists for today — skipping.")
+        return 0
+
     run_note = "forced test run" if args.force else ""
     if not market_data.is_market_open() and not args.force:
         # Catch-up: the Mac may have been asleep at 15:30. If today's session
@@ -86,12 +95,17 @@ def main() -> int:
             logger.info("Market closed — run %d recorded as skipped.", run_id)
             return 0
 
-    llm_up = llm_arm.ensure_server() and llm_arm.ensure_model()
+    if config.IS_CI:
+        # CI starts and health-checks the llama.cpp server itself.
+        llm_up = llm_arm.ensure_server()
+    else:
+        llm_up = llm_arm.ensure_server() and llm_arm.ensure_model()
     if not llm_up:
-        logger.error("LM Studio server/model unavailable — LLM arm will "
+        logger.error("LLM server/model unavailable — LLM arm will "
                      "record HOLD + error for every ticker this run.")
 
     tickers = [t.upper() for t in (args.tickers or config.WATCHLIST)]
+    run_note = (run_note + " | " if run_note else "") + f"runtime={config.RUNTIME_LABEL}"
     run_id = db.start_run(conn, config.LLM_MODEL, code_version(), notes=run_note)
     logger.info("Run %d started | model=%s | code=%s | %d tickers",
                 run_id, config.LLM_MODEL, code_version(), len(tickers))

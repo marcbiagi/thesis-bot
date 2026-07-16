@@ -1,0 +1,133 @@
+name: daily-run
+
+# Two crons because GitHub cron is UTC-only and 15:30 ET moves with DST:
+#   19:35 UTC = 15:35 EDT (summer hit) / 14:35 EST (winter, guarded out)
+#   20:35 UTC = 16:35 EDT (summer, guarded out) / 15:35 EST (winter hit)
+# The ET-window guard below lets exactly one firing per day through.
+on:
+  schedule:
+    - cron: "35 19 * * 1-5"
+    - cron: "35 20 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      test:
+        description: "Test mode: temp DB, 2 tickers, nothing committed"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: daily-run
+  cancel-in-progress: false
+
+env:
+  MODEL_URL: https://huggingface.co/lmstudio-community/gemma-4-12B-it-QAT-GGUF/resolve/main/gemma-4-12B-it-QAT-Q4_0.gguf
+  MODEL_FILE: gemma-4-12B-it-QAT-Q4_0.gguf
+  LLAMACPP_TAG: b10034   # pinned llama.cpp release
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ET-window guard (scheduled runs only)
+        id: guard
+        run: |
+          if [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "go=1" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          NOW=$(TZ=America/New_York date +%H%M)
+          if [ "$NOW" -ge 1525 ] && [ "$NOW" -le 1800 ]; then
+            echo "go=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "Outside 15:25-18:00 ET window ($NOW) — wrong-season cron firing, skipping."
+            echo "go=0" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Cache model
+        if: steps.guard.outputs.go == '1'
+        id: model-cache
+        uses: actions/cache@v4
+        with:
+          path: model/${{ env.MODEL_FILE }}
+          key: model-${{ env.MODEL_FILE }}
+
+      - name: Download model (cache miss)
+        if: steps.guard.outputs.go == '1' && steps.model-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p model
+          curl -sL --retry 3 -o "model/$MODEL_FILE" "$MODEL_URL"
+          ls -lh model/
+
+      - name: Install llama.cpp ${{ env.LLAMACPP_TAG }}
+        if: steps.guard.outputs.go == '1'
+        run: |
+          curl -sL --retry 3 -o llamacpp.tar.gz \
+            "https://github.com/ggml-org/llama.cpp/releases/download/${LLAMACPP_TAG}/llama-${LLAMACPP_TAG}-bin-ubuntu-x64.tar.gz"
+          mkdir -p llamacpp && tar xzf llamacpp.tar.gz -C llamacpp --strip-components=1
+          find llamacpp -name llama-server
+
+      - name: Install Python dependencies
+        if: steps.guard.outputs.go == '1'
+        run: pip install --quiet yfinance requests
+
+      - name: Start llama.cpp server
+        if: steps.guard.outputs.go == '1'
+        run: |
+          SERVER=$(find llamacpp -name llama-server | head -1)
+          nohup "$SERVER" -m "model/$MODEL_FILE" \
+            --host 127.0.0.1 --port 1234 -c 8192 --jinja \
+            > llama-server.log 2>&1 &
+          for i in $(seq 1 60); do
+            curl -sf http://127.0.0.1:1234/health > /dev/null && break
+            sleep 5
+          done
+          curl -sf http://127.0.0.1:1234/health
+
+      - name: Test run (temp DB, no commit)
+        if: steps.guard.outputs.go == '1' && github.event_name == 'workflow_dispatch' && inputs.test
+        env:
+          THESISBOT_CI: "1"
+          THESISBOT_RUNTIME: llamacpp-b10034-ci
+          THESISBOT_DB: /tmp/test-thesis.db
+        run: |
+          [ -f thesis.sql ] && sqlite3 /tmp/test-thesis.db < thesis.sql
+          python runner.py --force --tickers AAPL MSFT
+          echo "--- latest decisions ---"
+          sqlite3 /tmp/test-thesis.db "SELECT arm, ticker, signal, COALESCE(error,'ok'), substr(rationale,1,120) FROM decisions ORDER BY id DESC LIMIT 4;"
+
+      - name: Daily run
+        if: steps.guard.outputs.go == '1' && (github.event_name != 'workflow_dispatch' || !inputs.test)
+        env:
+          THESISBOT_CI: "1"
+          THESISBOT_RUNTIME: llamacpp-b10034-ci
+        run: |
+          [ -f thesis.sql ] && sqlite3 thesis.db < thesis.sql
+          python runner.py
+          sqlite3 thesis.db .dump > thesis.sql
+
+      - name: Commit results
+        if: steps.guard.outputs.go == '1' && (github.event_name != 'workflow_dispatch' || !inputs.test)
+        run: |
+          git config user.name "thesis-bot"
+          git config user.email "actions@github.com"
+          git add thesis.sql dashboard.html
+          git diff --cached --quiet && { echo "nothing to commit"; exit 0; }
+          git pull --rebase origin main
+          git commit -m "Daily run $(TZ=America/New_York date +%F)"
+          git push origin main
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-logs-${{ github.run_id }}
+          path: |
+            logs/
+            llama-server.log
+          retention-days: 14
+          if-no-files-found: ignore
