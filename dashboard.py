@@ -7,6 +7,7 @@ rebuilt on demand:  python3 dashboard.py && open dashboard.html
 """
 
 import json
+import re
 from datetime import datetime
 from string import Template
 
@@ -53,6 +54,92 @@ def collect() -> dict:
         "SELECT run_id, started_utc, status, llm_model, notes "
         "FROM runs ORDER BY run_id DESC LIMIT 15")]
 
+    # --- Latest known price per ticker (most recent decision that had one) --
+    last_price = {r["ticker"]: r["price"] for r in conn.execute(
+        "SELECT ticker, price FROM decisions d WHERE price IS NOT NULL AND "
+        "id = (SELECT MAX(id) FROM decisions x WHERE x.ticker = d.ticker "
+        "AND x.price IS NOT NULL)")}
+
+    # SPY never appears in decisions; imply its latest price from the most
+    # recent benchmark snapshot (equity minus cash, divided by shares held).
+    bench_pos = conn.execute(
+        "SELECT qty FROM positions WHERE arm = 'benchmark' LIMIT 1").fetchone()
+    bench_snap = conn.execute(
+        "SELECT equity, cash FROM snapshots WHERE arm = 'benchmark' "
+        "ORDER BY id DESC LIMIT 1").fetchone()
+    if bench_pos and bench_snap and bench_pos["qty"] > 0:
+        last_price.setdefault("SPY", round(
+            (bench_snap["equity"] - bench_snap["cash"]) / bench_pos["qty"], 2))
+
+    # --- Open positions with unrealized P/L ---------------------------------
+    positions = []
+    for r in conn.execute(
+            "SELECT arm, ticker, qty, avg_cost FROM positions ORDER BY arm, ticker"):
+        px = last_price.get(r["ticker"])
+        mv = r["qty"] * px if px else None
+        pl = (px - r["avg_cost"]) * r["qty"] if px else None
+        positions.append({
+            "arm": r["arm"], "ticker": r["ticker"],
+            "qty": round(r["qty"], 4), "avg_cost": round(r["avg_cost"], 2),
+            "last": px, "value": round(mv, 2) if mv is not None else None,
+            "pl": round(pl, 2) if pl is not None else None,
+            "pl_pct": round((px / r["avg_cost"] - 1) * 100, 2) if px else None,
+        })
+
+    # --- Research metrics ----------------------------------------------------
+    # Agreement between the two deciding arms (same run, same ticker).
+    pairs = conn.execute(
+        "SELECT a.signal AS lsig, b.signal AS rsig FROM decisions a "
+        "JOIN decisions b ON a.run_id = b.run_id AND a.ticker = b.ticker "
+        "AND b.arm = 'rules' WHERE a.arm = 'llm' AND a.error IS NULL"
+    ).fetchall()
+    n_pairs = len(pairs)
+    agreement = round(100 * sum(1 for p in pairs if p["lsig"] == p["rsig"])
+                      / n_pairs, 1) if n_pairs else None
+
+    # LLM confidence by signal (parsed from the "[conf X]" rationale prefix).
+    conf_by_signal = {}
+    for r in conn.execute("SELECT signal, rationale FROM decisions "
+                          "WHERE arm = 'llm' AND error IS NULL"):
+        m = re.match(r"\[conf ([0-9.]+)\]", r["rationale"] or "")
+        if m:
+            conf_by_signal.setdefault(r["signal"], []).append(float(m.group(1)))
+    confidence = {sig: {"avg": round(sum(v) / len(v), 3), "n": len(v)}
+                  for sig, v in conf_by_signal.items()}
+
+    # Decision scoreboard: average return since signal, marked at the latest
+    # known price — the thesis's decision-level metric, accruing daily.
+    fwd = {}
+    for arm in ("llm", "rules"):
+        fwd[arm] = {}
+        for sig in ("BUY", "SELL"):
+            rets = [last_price[r["ticker"]] / r["price"] - 1 for r in conn.execute(
+                "SELECT ticker, price FROM decisions WHERE arm = ? AND signal = ? "
+                "AND error IS NULL AND price > 0", (arm, sig))
+                if last_price.get(r["ticker"])]
+            fwd[arm][sig] = {"avg_pct": round(100 * sum(rets) / len(rets), 3)
+                             if rets else None, "n": len(rets)}
+
+    # Income and executed trades per arm.
+    income = {}
+    for r in conn.execute("SELECT arm, side, SUM(notional) s FROM trades "
+                          "WHERE side IN ('DIV','INT') GROUP BY arm, side"):
+        income.setdefault(r["arm"], {})[r["side"]] = round(r["s"], 2)
+    exec_trades = {r["arm"]: r["n"] for r in conn.execute(
+        "SELECT arm, COUNT(*) n FROM trades WHERE side IN ('BUY','SELL') "
+        "GROUP BY arm")}
+
+    lat = conn.execute("SELECT AVG(latency_ms) a, MAX(latency_ms) m FROM "
+                       "decisions WHERE arm = 'llm' AND latency_ms IS NOT NULL"
+                       ).fetchone()
+    research = {
+        "agreement_pct": agreement, "n_pairs": n_pairs,
+        "confidence": confidence, "fwd": fwd, "income": income,
+        "exec_trades": exec_trades,
+        "latency_avg_s": round(lat["a"] / 1000, 1) if lat["a"] else None,
+        "latency_max_s": round(lat["m"] / 1000, 1) if lat["m"] else None,
+    }
+
     stats = {
         "total_decisions": conn.execute("SELECT COUNT(*) n FROM decisions").fetchone()["n"],
         "completed_runs": conn.execute(
@@ -66,6 +153,7 @@ def collect() -> dict:
     }
 
     return {"series": series, "latest": latest, "counts": counts,
+            "positions": positions, "research": research,
             "decisions": decisions, "runs": runs, "stats": stats,
             "model": LLM_MODEL, "initial_cash": INITIAL_CASH,
             "generated": datetime.now().strftime("%Y-%m-%d %H:%M %Z").strip()}
@@ -131,6 +219,10 @@ TEMPLATE = Template(r"""<!doctype html>
             margin-bottom: 8px; flex-wrap: wrap; }
   .legend span { display: inline-flex; align-items: center; gap: 6px; }
   .empty { color: var(--muted); padding: 24px; text-align: center; }
+  .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 18px; }
+  .metrics h3 { font-size: 12px; color: var(--muted); text-transform: uppercase;
+                letter-spacing: .04em; margin-bottom: 6px; font-weight: 600; }
+  .metrics table td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
 </style>
 </head>
 <body>
@@ -144,6 +236,16 @@ $$100,000 (virtual) · open this file any time: it always shows the latest run</
   <h2>Equity curves</h2>
   <div class="legend" id="legend"></div>
   <div id="chart"></div>
+</div>
+
+<div class="card">
+  <h2>Open positions</h2>
+  <div class="scroll"><table id="pos"></table></div>
+</div>
+
+<div class="card">
+  <h2>Research metrics</h2>
+  <div class="metrics" id="metrics"></div>
 </div>
 
 <div class="card">
@@ -265,6 +367,59 @@ document.getElementById("legend").innerHTML = ARMS.map(a =>
     tip.style.top = (ev.clientY + 14) + "px";
   });
   svg.addEventListener("mouseleave", () => { tip.style.display = "none"; xh.setAttribute("visibility", "hidden"); });
+})();
+
+/* ---- open positions ---- */
+const armName = id => (ARMS.find(a => a.id === id) || {label: id}).label;
+const armColor = id => (ARMS.find(a => a.id === id) || {color: "var(--muted)"}).color;
+document.getElementById("pos").innerHTML =
+  "<tr><th>Arm</th><th>Ticker</th><th>Qty</th><th>Avg cost</th><th>Last</th><th>Value</th><th>P/L $</th><th>P/L %</th></tr>" +
+  (D.positions.length ? D.positions.map(p => {
+    const cls = (p.pl ?? 0) >= 0 ? "pos" : "neg";
+    return `<tr>
+      <td><span class="dot" style="background:${armColor(p.arm)}"></span> ${armName(p.arm)}</td>
+      <td><b>${p.ticker}</b></td>
+      <td class="num">${p.qty}</td>
+      <td class="num">${"$" + p.avg_cost.toFixed(2)}</td>
+      <td class="num">${p.last ? "$" + p.last.toFixed(2) : "—"}</td>
+      <td class="num">${p.value ? "$" + p.value.toLocaleString("en-US", {minimumFractionDigits: 2}) : "—"}</td>
+      <td class="num ${cls}">${p.pl == null ? "—" : (p.pl >= 0 ? "+" : "") + p.pl.toFixed(2)}</td>
+      <td class="num ${cls}">${p.pl_pct == null ? "—" : fmtPct(p.pl_pct)}</td></tr>`;
+  }).join("") : '<tr><td colspan="8" class="empty">No open positions.</td></tr>');
+
+/* ---- research metrics ---- */
+(function () {
+  const R = D.research;
+  const pct = v => v == null ? "—" : (v >= 0 ? "+" : "") + v.toFixed(2) + "%";
+  const conf = s => R.confidence[s] ? `${R.confidence[s].avg.toFixed(2)} (n=${R.confidence[s].n})` : "—";
+  const f = (arm, sig) => {
+    const x = R.fwd[arm] && R.fwd[arm][sig];
+    return x && x.avg_pct != null ? `${pct(x.avg_pct)} (n=${x.n})` : "—";
+  };
+  const inc = arm => {
+    const i = R.income[arm] || {};
+    return "$" + (((i.DIV || 0) + (i.INT || 0)).toFixed(2));
+  };
+  document.getElementById("metrics").innerHTML = `
+    <div><h3>Decision quality</h3><table>
+      <tr><td>LLM ↔ Rules agreement</td><td>${R.agreement_pct == null ? "—" : R.agreement_pct + "%"} (n=${R.n_pairs})</td></tr>
+      <tr><td>LLM confidence · BUY</td><td>${conf("BUY")}</td></tr>
+      <tr><td>LLM confidence · HOLD</td><td>${conf("HOLD")}</td></tr>
+      <tr><td>LLM confidence · SELL</td><td>${conf("SELL")}</td></tr>
+    </table></div>
+    <div><h3>Return since signal (marked at last price)</h3><table>
+      <tr><td>LLM after BUY</td><td>${f("llm", "BUY")}</td></tr>
+      <tr><td>Rules after BUY</td><td>${f("rules", "BUY")}</td></tr>
+      <tr><td>LLM after SELL</td><td>${f("llm", "SELL")}</td></tr>
+      <tr><td>Rules after SELL</td><td>${f("rules", "SELL")}</td></tr>
+    </table></div>
+    <div><h3>Operations &amp; income</h3><table>
+      <tr><td>LLM latency avg / max</td><td>${R.latency_avg_s ?? "—"}s / ${R.latency_max_s ?? "—"}s</td></tr>
+      <tr><td>Trades executed (LLM / Rules)</td><td>${R.exec_trades.llm || 0} / ${R.exec_trades.rules || 0}</td></tr>
+      <tr><td>Div + interest · LLM</td><td>${inc("llm")}</td></tr>
+      <tr><td>Div + interest · Rules</td><td>${inc("rules")}</td></tr>
+      <tr><td>Div + interest · SPY B&amp;H</td><td>${inc("benchmark")}</td></tr>
+    </table></div>`;
 })();
 
 /* ---- signal mix ---- */
