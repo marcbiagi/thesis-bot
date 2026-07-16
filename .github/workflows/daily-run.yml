@@ -29,7 +29,9 @@ env:
 
 jobs:
   run:
-    runs-on: ubuntu-latest
+    # ARM runners (free for public repos): llama.cpp has optimized ARM
+    # kernels for Q4_0 — meaningfully faster than x64 for this exact quant.
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
@@ -67,7 +69,7 @@ jobs:
         if: steps.guard.outputs.go == '1'
         run: |
           curl -sL --retry 3 -o llamacpp.tar.gz \
-            "https://github.com/ggml-org/llama.cpp/releases/download/${LLAMACPP_TAG}/llama-${LLAMACPP_TAG}-bin-ubuntu-x64.tar.gz"
+            "https://github.com/ggml-org/llama.cpp/releases/download/${LLAMACPP_TAG}/llama-${LLAMACPP_TAG}-bin-ubuntu-arm64.tar.gz"
           mkdir -p llamacpp && tar xzf llamacpp.tar.gz -C llamacpp --strip-components=1
           find llamacpp -name llama-server
 
@@ -92,7 +94,9 @@ jobs:
         if: steps.guard.outputs.go == '1' && github.event_name == 'workflow_dispatch' && inputs.test
         env:
           THESISBOT_CI: "1"
-          THESISBOT_RUNTIME: llamacpp-b10034-ci
+          THESISBOT_RUNTIME: llamacpp-b10034-ci-arm64
+          THESISBOT_LLM_TIMEOUT: "1500"
+          THESISBOT_LLM_RETRIES: "1"
           THESISBOT_DB: /tmp/test-thesis.db
         run: |
           [ -f thesis.sql ] && sqlite3 /tmp/test-thesis.db < thesis.sql
@@ -104,7 +108,9 @@ jobs:
         if: steps.guard.outputs.go == '1' && (github.event_name != 'workflow_dispatch' || !inputs.test)
         env:
           THESISBOT_CI: "1"
-          THESISBOT_RUNTIME: llamacpp-b10034-ci
+          THESISBOT_RUNTIME: llamacpp-b10034-ci-arm64
+          THESISBOT_LLM_TIMEOUT: "1500"
+          THESISBOT_LLM_RETRIES: "1"
         run: |
           [ -f thesis.sql ] && sqlite3 thesis.db < thesis.sql
           python runner.py

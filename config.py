@@ -57,8 +57,10 @@ LLM_TEMPERATURE = 0.0      # deterministic as possible, for reproducibility
 # The budget must cover reasoning + the final JSON, or content comes back
 # empty. 1500 proved too tight (~4% of day-1 decisions truncated).
 LLM_MAX_TOKENS = 3000
-LLM_TIMEOUT_S = 300        # local inference on an M4 can be slow; be patient
-LLM_RETRIES = 2
+# Local M4 (Metal): ~75 s/decision, 300 s is ample. CI (CPU): generation is
+# several times slower, so the workflow overrides these via environment.
+LLM_TIMEOUT_S = int(os.environ.get("THESISBOT_LLM_TIMEOUT", "300"))
+LLM_RETRIES = int(os.environ.get("THESISBOT_LLM_RETRIES", "2"))
 LMS_BIN = "/Users/marcobiagi/.lmstudio/bin/lms"
 LLM_CONTEXT_LEN = 8192     # part of the pinned model configuration
 LLM_LOAD_TTL_S = 10800     # keep the model loaded 3h after last use
