@@ -50,6 +50,9 @@ LLM_TEMPERATURE = 0.0      # deterministic as possible, for reproducibility
 LLM_MAX_TOKENS = 1500
 LLM_TIMEOUT_S = 300        # local inference on an M4 can be slow; be patient
 LLM_RETRIES = 2
+LMS_BIN = "/Users/marcobiagi/.lmstudio/bin/lms"
+LLM_CONTEXT_LEN = 8192     # part of the pinned model configuration
+LLM_LOAD_TTL_S = 10800     # keep the model loaded 3h after last use
 
 # --- Rule-based arm thresholds --------------------------------------------------
 SMA_SHORT = 50

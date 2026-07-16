@@ -18,8 +18,9 @@ import time
 
 import requests
 
-from config import (LLM_BASE_URL, LLM_MAX_TOKENS, LLM_MODEL, LLM_RETRIES,
-                    LLM_TEMPERATURE, LLM_TIMEOUT_S)
+from config import (LLM_BASE_URL, LLM_CONTEXT_LEN, LLM_LOAD_TTL_S,
+                    LLM_MAX_TOKENS, LLM_MODEL, LLM_RETRIES, LLM_TEMPERATURE,
+                    LLM_TIMEOUT_S, LMS_BIN)
 
 logger = logging.getLogger("llm_arm")
 
@@ -96,14 +97,44 @@ def ensure_server() -> bool:
         if attempt == 0:
             logger.info("LM Studio server down — attempting 'lms server start'")
             try:
-                subprocess.run(
-                    ["/Users/marcobiagi/.lmstudio/bin/lms", "server", "start"],
-                    capture_output=True, timeout=120,
-                )
+                subprocess.run([LMS_BIN, "server", "start"],
+                               capture_output=True, timeout=120)
                 time.sleep(5)
             except Exception as exc:
                 logger.error("could not start LM Studio server: %s", exc)
     return False
+
+
+def _model_is_loaded() -> bool:
+    try:
+        out = subprocess.run([LMS_BIN, "ps"], capture_output=True, text=True,
+                             timeout=30).stdout
+        return LLM_MODEL in out
+    except Exception as exc:
+        logger.warning("could not check loaded models: %s", exc)
+        return False
+
+
+def ensure_model() -> bool:
+    """
+    Make sure the pinned model is actually loaded, not just downloaded.
+    LM Studio auto-unloads idle JIT-loaded models (default TTL 1h), and a
+    request against an unloaded model can 400 instead of reloading it.
+    """
+    if _model_is_loaded():
+        return True
+    logger.info("model not loaded — loading %s (context %d, ttl %ds)",
+                LLM_MODEL, LLM_CONTEXT_LEN, LLM_LOAD_TTL_S)
+    try:
+        subprocess.run(
+            [LMS_BIN, "load", LLM_MODEL,
+             "--context-length", str(LLM_CONTEXT_LEN),
+             "--ttl", str(LLM_LOAD_TTL_S), "--yes"],
+            capture_output=True, timeout=600,
+        )
+    except Exception as exc:
+        logger.error("model load failed: %s", exc)
+    return _model_is_loaded()
 
 
 def _parse(text: str) -> dict | None:
@@ -165,6 +196,11 @@ def decide(packet: dict, position_qty: float, avg_cost: float | None):
             last_error = f"{type(exc).__name__}: {exc}"
             logger.warning("%s: LLM call failed (attempt %d): %s",
                            packet["ticker"], attempt + 1, last_error)
+            # A 400/404 usually means the model got unloaded — reload it
+            # before burning the remaining retries.
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            if status in (400, 404):
+                ensure_model()
 
     return "HOLD", "LLM unavailable — defaulting to HOLD (no directional bias)", \
         None, None, last_error

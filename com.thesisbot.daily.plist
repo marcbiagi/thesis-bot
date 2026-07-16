@@ -6,6 +6,8 @@
     <string>com.thesisbot.daily</string>
     <key>ProgramArguments</key>
     <array>
+        <string>/usr/bin/caffeinate</string>
+        <string>-i</string>
         <string>/Library/Frameworks/Python.framework/Versions/3.14/bin/python3</string>
         <string>/Users/marcobiagi/thesis-bot/runner.py</string>
     </array>

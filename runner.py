@@ -86,10 +86,10 @@ def main() -> int:
             logger.info("Market closed — run %d recorded as skipped.", run_id)
             return 0
 
-    llm_up = llm_arm.ensure_server()
+    llm_up = llm_arm.ensure_server() and llm_arm.ensure_model()
     if not llm_up:
-        logger.error("LM Studio server unreachable — LLM arm will record "
-                     "HOLD + error for every ticker this run.")
+        logger.error("LM Studio server/model unavailable — LLM arm will "
+                     "record HOLD + error for every ticker this run.")
 
     tickers = [t.upper() for t in (args.tickers or config.WATCHLIST)]
     run_id = db.start_run(conn, config.LLM_MODEL, code_version(), notes=run_note)
