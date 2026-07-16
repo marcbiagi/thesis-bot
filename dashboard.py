@@ -16,6 +16,70 @@ from config import ARMS, INITIAL_CASH, LLM_MODEL, ROOT
 
 OUT_PATH = ROOT / "dashboard.html"
 
+TRADING_DAYS = 252
+
+
+def _perf_stats(eq: list[float], bench: list[float], rf_annual_pct: float) -> dict:
+    """
+    Standard portfolio statistics from an equity series, benchmark-relative
+    where applicable. Returns None per metric until enough data exists.
+    """
+    out = {k: None for k in ("total_ret", "cagr", "vol", "sharpe", "sortino",
+                             "max_dd", "beta", "alpha", "te", "ir", "corr")}
+    n = len(eq)
+    if n < 2:
+        return out
+
+    rets = [eq[i] / eq[i - 1] - 1 for i in range(1, n)]
+    brets = [bench[i] / bench[i - 1] - 1 for i in range(1, min(n, len(bench)))]
+    rf_d = rf_annual_pct / 100.0 / TRADING_DAYS
+    days = n - 1
+
+    out["total_ret"] = round((eq[-1] / eq[0] - 1) * 100, 2)
+    out["cagr"] = round(((eq[-1] / eq[0]) ** (TRADING_DAYS / days) - 1) * 100, 2)
+
+    mean = sum(rets) / len(rets)
+    if len(rets) >= 2:
+        var = sum((r - mean) ** 2 for r in rets) / (len(rets) - 1)
+        sd = var ** 0.5
+        out["vol"] = round(sd * TRADING_DAYS ** 0.5 * 100, 2)
+        if sd > 0:
+            out["sharpe"] = round((mean - rf_d) / sd * TRADING_DAYS ** 0.5, 2)
+        downside = [min(0.0, r - rf_d) for r in rets]
+        dvar = sum(d ** 2 for d in downside) / (len(rets) - 1)
+        if dvar > 0:
+            out["sortino"] = round((mean - rf_d) / dvar ** 0.5 * TRADING_DAYS ** 0.5, 2)
+
+    peak, max_dd = eq[0], 0.0
+    for v in eq:
+        peak = max(peak, v)
+        max_dd = min(max_dd, v / peak - 1)
+    out["max_dd"] = round(max_dd * 100, 2)
+
+    # Benchmark-relative statistics (need aligned series).
+    m = min(len(rets), len(brets))
+    if m >= 3:
+        r, b = rets[:m], brets[:m]
+        mr, mb = sum(r) / m, sum(b) / m
+        cov = sum((r[i] - mr) * (b[i] - mb) for i in range(m)) / (m - 1)
+        bvar = sum((x - mb) ** 2 for x in b) / (m - 1)
+        rvar = sum((x - mr) ** 2 for x in r) / (m - 1)
+        if bvar > 0:
+            beta = cov / bvar
+            out["beta"] = round(beta, 2)
+            # Jensen's alpha, annualized.
+            out["alpha"] = round(((mr - rf_d) - beta * (mb - rf_d))
+                                 * TRADING_DAYS * 100, 2)
+        if bvar > 0 and rvar > 0:
+            out["corr"] = round(cov / (bvar ** 0.5 * rvar ** 0.5), 2)
+        diff = [r[i] - b[i] for i in range(m)]
+        md = sum(diff) / m
+        dvar = sum((d - md) ** 2 for d in diff) / (m - 1)
+        if dvar > 0:
+            out["te"] = round(dvar ** 0.5 * TRADING_DAYS ** 0.5 * 100, 2)
+            out["ir"] = round(md / dvar ** 0.5 * TRADING_DAYS ** 0.5, 2)
+    return out
+
 
 def collect() -> dict:
     conn = db.connect()
@@ -140,6 +204,19 @@ def collect() -> dict:
         "latency_max_s": round(lat["m"] / 1000, 1) if lat["m"] else None,
     }
 
+    # --- Portfolio performance statistics vs the SPY benchmark ---------------
+    rf = float(db.get_kv(conn, "last_tbill_rate") or 4.0)
+    bench_eq = [p["eq"] for p in series.get("benchmark", [])]
+    perf = {arm: _perf_stats([p["eq"] for p in series.get(arm, [])],
+                             bench_eq, rf) for arm in ARMS}
+    # The benchmark measured against itself: fix the trivial identities.
+    if len(bench_eq) >= 2:
+        perf["benchmark"]["beta"] = 1.0
+        perf["benchmark"]["alpha"] = 0.0
+        perf["benchmark"]["te"] = perf["benchmark"]["ir"] = None
+        perf["benchmark"]["corr"] = 1.0
+    perf_meta = {"rf_pct": rf, "days": max(0, len(bench_eq) - 1)}
+
     stats = {
         "total_decisions": conn.execute("SELECT COUNT(*) n FROM decisions").fetchone()["n"],
         "completed_runs": conn.execute(
@@ -154,6 +231,7 @@ def collect() -> dict:
 
     return {"series": series, "latest": latest, "counts": counts,
             "positions": positions, "research": research,
+            "perf": perf, "perf_meta": perf_meta,
             "decisions": decisions, "runs": runs, "stats": stats,
             "model": LLM_MODEL, "initial_cash": INITIAL_CASH,
             "generated": datetime.now().strftime("%Y-%m-%d %H:%M %Z").strip()}
@@ -223,6 +301,9 @@ TEMPLATE = Template(r"""<!doctype html>
   .metrics h3 { font-size: 12px; color: var(--muted); text-transform: uppercase;
                 letter-spacing: .04em; margin-bottom: 6px; font-weight: 600; }
   .metrics table td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+  .hint { font-weight: 400; font-size: 11px; color: var(--muted); margin-left: 8px; }
+  #perf td:not(:first-child) { text-align: right; font-variant-numeric: tabular-nums; }
+  #perf th:not(:first-child) { text-align: right; }
 </style>
 </head>
 <body>
@@ -241,6 +322,11 @@ $$100,000 (virtual) · open this file any time: it always shows the latest run</
 <div class="card">
   <h2>Open positions</h2>
   <div class="scroll"><table id="pos"></table></div>
+</div>
+
+<div class="card">
+  <h2>Performance statistics <span class="hint" id="perfhint"></span></h2>
+  <div class="scroll"><table id="perf"></table></div>
 </div>
 
 <div class="card">
@@ -386,6 +472,39 @@ document.getElementById("pos").innerHTML =
       <td class="num ${cls}">${p.pl == null ? "—" : (p.pl >= 0 ? "+" : "") + p.pl.toFixed(2)}</td>
       <td class="num ${cls}">${p.pl_pct == null ? "—" : fmtPct(p.pl_pct)}</td></tr>`;
   }).join("") : '<tr><td colspan="8" class="empty">No open positions.</td></tr>');
+
+/* ---- performance statistics ---- */
+(function () {
+  const P = D.perf, M = D.perf_meta;
+  document.getElementById("perfhint").textContent =
+    `${M.days} trading day${M.days === 1 ? "" : "s"} of data · risk-free (13w T-bill): ${M.rf_pct}% · annualized where noted`;
+  const ROWS = [
+    ["total_ret", "Total return", "%"],
+    ["cagr", "CAGR (ann.)", "%"],
+    ["vol", "Volatility (ann.)", "%"],
+    ["sharpe", "Sharpe ratio", ""],
+    ["sortino", "Sortino ratio", ""],
+    ["max_dd", "Max drawdown", "%"],
+    ["beta", "Beta vs SPY", ""],
+    ["alpha", "Jensen's alpha (ann.)", "%"],
+    ["te", "Tracking error (ann.)", "%"],
+    ["ir", "Information ratio", ""],
+    ["corr", "Correlation vs SPY", ""],
+  ];
+  const cell = (arm, key, unit) => {
+    const v = P[arm] ? P[arm][key] : null;
+    if (v == null) return "<td>—</td>";
+    const signed = ["total_ret", "cagr", "alpha"].includes(key);
+    const cls = signed ? (v >= 0 ? "pos" : "neg") : (key === "max_dd" && v < 0 ? "neg" : "");
+    const txt = (signed && v > 0 ? "+" : "") + v.toFixed(2) + unit;
+    return `<td class="${cls}">${txt}</td>`;
+  };
+  document.getElementById("perf").innerHTML =
+    "<tr><th>Metric</th><th>LLM</th><th>Rules</th><th>SPY B&H</th></tr>" +
+    ROWS.map(([key, label, unit]) =>
+      `<tr><td>${label}</td>${cell("llm", key, unit)}${cell("rules", key, unit)}${cell("benchmark", key, unit)}</tr>`
+    ).join("");
+})();
 
 /* ---- research metrics ---- */
 (function () {
