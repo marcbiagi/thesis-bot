@@ -46,8 +46,9 @@ LLM_BASE_URL = "http://localhost:1234/v1"
 LLM_MODEL = "google/gemma-4-12b-qat"
 LLM_TEMPERATURE = 0.0      # deterministic as possible, for reproducibility
 # Gemma 4 is a reasoning model: it spends tokens thinking before answering.
-# The budget must cover reasoning + the final JSON, or content comes back empty.
-LLM_MAX_TOKENS = 1500
+# The budget must cover reasoning + the final JSON, or content comes back
+# empty. 1500 proved too tight (~4% of day-1 decisions truncated).
+LLM_MAX_TOKENS = 3000
 LLM_TIMEOUT_S = 300        # local inference on an M4 can be slow; be patient
 LLM_RETRIES = 2
 LMS_BIN = "/Users/marcobiagi/.lmstudio/bin/lms"

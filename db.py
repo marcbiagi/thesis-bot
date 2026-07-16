@@ -64,6 +64,11 @@ CREATE TABLE IF NOT EXISTS arms (
     cash REAL NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS kv (
+    key   TEXT PRIMARY KEY,
+    value TEXT
+);
+
 CREATE TABLE IF NOT EXISTS snapshots (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     run_id      INTEGER NOT NULL REFERENCES runs(run_id),
@@ -111,6 +116,17 @@ def finish_run(conn, run_id: int, status: str) -> None:
         "UPDATE runs SET finished_utc = ?, status = ? WHERE run_id = ?",
         (utcnow(), status, run_id),
     )
+    conn.commit()
+
+
+def get_kv(conn, key: str) -> str | None:
+    row = conn.execute("SELECT value FROM kv WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else None
+
+
+def set_kv(conn, key: str, value: str) -> None:
+    conn.execute("INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)",
+                 (key, value))
     conn.commit()
 
 

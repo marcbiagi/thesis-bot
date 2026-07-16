@@ -102,6 +102,52 @@ def init_benchmark(conn, run_id: int, arm: str, ticker: str, price: float | None
     return f"benchmark invested: {buy_qty:.4f} {ticker} @ ${price:.2f}"
 
 
+def credit_dividends(conn, run_id: int, dividends: dict[str, float]) -> list[str]:
+    """
+    Credit today's ex-dividend amounts to every arm holding the stock.
+    Recorded in trades as side='DIV' (price = per-share amount) for audit.
+    """
+    notes = []
+    for arm_row in conn.execute("SELECT arm FROM arms"):
+        arm = arm_row["arm"]
+        for row in conn.execute(
+                "SELECT ticker, qty FROM positions WHERE arm = ?", (arm,)):
+            per_share = dividends.get(row["ticker"], 0.0)
+            if per_share <= 0:
+                continue
+            amount = row["qty"] * per_share
+            _set_cash(conn, arm, get_cash(conn, arm) + amount)
+            conn.execute(
+                "INSERT INTO trades (run_id, arm, ticker, side, qty, price,"
+                " notional, created_utc) VALUES (?, ?, ?, 'DIV', ?, ?, ?, ?)",
+                (run_id, arm, row["ticker"], row["qty"], per_share, amount,
+                 utcnow()),
+            )
+            notes.append(f"{arm}: {row['ticker']} dividend ${amount:.2f}")
+    conn.commit()
+    return notes
+
+
+def accrue_cash_interest(conn, run_id: int, annual_pct: float) -> None:
+    """
+    One trading day of interest on idle cash at the T-bill rate (ACT/252).
+    Recorded in trades as side='INT' on pseudo-ticker $CASH (price = rate %).
+    """
+    daily = annual_pct / 100.0 / 252.0
+    for arm_row in conn.execute("SELECT arm, cash FROM arms"):
+        arm, cash = arm_row["arm"], arm_row["cash"]
+        interest = cash * daily
+        if interest <= 0:
+            continue
+        _set_cash(conn, arm, cash + interest)
+        conn.execute(
+            "INSERT INTO trades (run_id, arm, ticker, side, qty, price,"
+            " notional, created_utc) VALUES (?, ?, '$CASH', 'INT', 0, ?, ?, ?)",
+            (run_id, arm, annual_pct, interest, utcnow()),
+        )
+    conn.commit()
+
+
 def snapshot(conn, run_id: int, arm: str, prices: dict[str, float]) -> float:
     eq = equity(conn, arm, prices)
     conn.execute(

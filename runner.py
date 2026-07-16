@@ -144,6 +144,25 @@ def main() -> int:
                                     config.BENCHMARK_TICKER, spy["price"])
     logger.info("[BENCH] %s", note)
 
+    # --- Total-return accounting: dividends + interest, once per ET day -----
+    from zoneinfo import ZoneInfo
+    et_today = datetime.now(ZoneInfo("America/New_York")).date().isoformat()
+    if db.get_kv(conn, "accrual_date") != et_today:
+        dividends = {t: packets[t].get("dividend_today", 0.0) for t in packets}
+        dividends[config.BENCHMARK_TICKER] = spy.get("dividend_today", 0.0)
+        for div_note in portfolio.credit_dividends(conn, run_id, dividends):
+            logger.info("[DIV] %s", div_note)
+
+        rate = market_data.get_tbill_rate()
+        if rate is None:
+            rate = float(db.get_kv(conn, "last_tbill_rate") or 4.0)
+            logger.warning("T-bill rate unavailable — using last known %.2f%%", rate)
+        else:
+            db.set_kv(conn, "last_tbill_rate", str(rate))
+        portfolio.accrue_cash_interest(conn, run_id, rate)
+        logger.info("[INT] idle cash accrued at %.2f%% annualized", rate)
+        db.set_kv(conn, "accrual_date", et_today)
+
     for arm in config.ARMS:
         eq = portfolio.snapshot(conn, run_id, arm, prices)
         logger.info("[EQUITY] %-9s $%s", arm, f"{eq:,.2f}")

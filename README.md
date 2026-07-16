@@ -39,7 +39,12 @@ and applies the decisions to the virtual portfolios.
    costs). Differences between arms are therefore attributable to decisions.
 4. **Failures are neutral.** A crashed data source or unreachable LLM
    records HOLD + an error, never a directional signal.
-5. **Known limitations.** No transaction costs or slippage (results are an
+5. **Total-return accounting (from July 16, 2026).** Dividends are credited
+   to cash on the ex-date (trades side `DIV`), and idle cash accrues daily
+   interest at the 13-week T-bill rate (^IRX, trades side `INT`, ACT/252),
+   so neither invested nor cash-heavy arms are structurally penalized.
+   July 15 (day 1) predates this — a documented one-day gap.
+6. **Known limitations.** No transaction costs or slippage (results are an
    upper bound); single market regime (~2 years); paper prices from Yahoo
    Finance; runs skip days when the Mac is off at 15:30 ET (gaps are
    visible in the `runs` table).

@@ -91,6 +91,20 @@ def get_packet(ticker: str) -> dict:
 
     packet["headlines"] = _headlines(tk)
 
+    # Total-return accounting: if today is this stock's ex-dividend date,
+    # holders get the per-share amount credited to cash.
+    packet["dividend_today"] = 0.0
+    try:
+        divs = tk.dividends
+        if divs is not None and len(divs):
+            from zoneinfo import ZoneInfo
+            et_today = datetime.now(ZoneInfo("America/New_York")).date()
+            last_ex = divs.index[-1].date()
+            if last_ex == et_today:
+                packet["dividend_today"] = round(float(divs.iloc[-1]), 4)
+    except Exception as exc:
+        logger.warning("%s: dividend check failed: %s", ticker, exc)
+
     # Prefer a live quote over yesterday's close when the market is open.
     try:
         live = tk.fast_info.last_price
@@ -100,6 +114,18 @@ def get_packet(ticker: str) -> dict:
         pass
 
     return packet
+
+
+def get_tbill_rate() -> float | None:
+    """Latest 13-week T-bill annualized yield (%) via ^IRX — the rate idle
+    virtual cash earns. None if unavailable (caller falls back to last known)."""
+    try:
+        hist = yf.Ticker("^IRX").history(period="5d", interval="1d")
+        if not hist.empty:
+            return round(float(hist["Close"].dropna().iloc[-1]), 3)
+    except Exception as exc:
+        logger.warning("T-bill rate fetch failed: %s", exc)
+    return None
 
 
 def _last_spy_bar(retries: int = 3) -> datetime | None:
