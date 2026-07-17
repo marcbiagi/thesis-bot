@@ -46,8 +46,15 @@ and applies the decisions to the virtual portfolios.
    July 15 (day 1) predates this — a documented one-day gap.
 6. **Known limitations.** No transaction costs or slippage (results are an
    upper bound); single market regime (~2 years); paper prices from Yahoo
-   Finance; runs skip days when the Mac is off at 15:30 ET (gaps are
-   visible in the `runs` table).
+   Finance; missed days appear as gaps in the `runs` table or as failed
+   workflow runs in the Actions history.
+
+## Data gap log
+
+- **2026-07-16**: decision day lost. Both CI runs completed all decisions
+  but failed at the commit step (git ordering bug, fixed in the workflow
+  the next morning); results were discarded with the ephemeral runner.
+  Portfolio state carries over from 2026-07-15 unaffected.
 
 ## Pinned treatment model
 
