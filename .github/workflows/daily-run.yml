@@ -112,6 +112,10 @@ jobs:
           THESISBOT_LLM_TIMEOUT: "1500"
           THESISBOT_LLM_RETRIES: "1"
         run: |
+          # Sync to latest main: a queued job is pinned to the repo state at
+          # queue time and would miss a same-day run pushed while it waited.
+          git fetch origin main
+          git reset --hard origin/main
           [ -f thesis.sql ] && sqlite3 thesis.db < thesis.sql
           python runner.py
           sqlite3 thesis.db .dump > thesis.sql
