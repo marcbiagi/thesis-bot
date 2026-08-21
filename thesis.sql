@@ -46,6 +46,7 @@ INSERT INTO runs VALUES(34,'2026-08-19T21:16:52+00:00','2026-08-19T21:16:52+00:0
 INSERT INTO runs VALUES(35,'2026-08-20T19:57:14+00:00','2026-08-20T21:27:25+00:00','completed','google/gemma-4-12b-qat','7fd364b','runtime=llamacpp-b10034-ci-arm64');
 INSERT INTO runs VALUES(36,'2026-08-20T21:29:33+00:00','2026-08-20T21:29:33+00:00','skipped_already_ran_today','google/gemma-4-12b-qat','b2b5283','runtime=llamacpp-b10034-ci-arm64');
 INSERT INTO runs VALUES(37,'2026-08-21T19:50:20+00:00','2026-08-21T21:14:50+00:00','completed','google/gemma-4-12b-qat','17abe7e','runtime=llamacpp-b10034-ci-arm64');
+INSERT INTO runs VALUES(38,'2026-08-21T21:16:38+00:00','2026-08-21T21:16:38+00:00','skipped_already_ran_today','google/gemma-4-12b-qat','b61d88f','runtime=llamacpp-b10034-ci-arm64');
 CREATE TABLE decisions (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     run_id       INTEGER NOT NULL REFERENCES runs(run_id),
@@ -1631,7 +1632,7 @@ CREATE TABLE kv (
 INSERT INTO kv VALUES('last_tbill_rate','3.71');
 INSERT INTO kv VALUES('accrual_date','2026-08-21');
 DELETE FROM sqlite_sequence;
-INSERT INTO sqlite_sequence VALUES('runs',37);
+INSERT INTO sqlite_sequence VALUES('runs',38);
 INSERT INTO sqlite_sequence VALUES('decisions',1300);
 INSERT INTO sqlite_sequence VALUES('trades',110);
 INSERT INTO sqlite_sequence VALUES('snapshots',78);
